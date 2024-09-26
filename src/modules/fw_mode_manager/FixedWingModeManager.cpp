@@ -392,18 +392,10 @@ FixedWingModeManager::set_control_mode_current(const hrt_abstime &now)
 			return;
 		}
 
-	} else if ((_control_mode.flag_control_auto_enabled && _control_mode.flag_control_position_enabled)
-		   && (_position_setpoint_current_valid
-		       || _pos_sp_triplet.current.type == position_setpoint_s::SETPOINT_TYPE_IDLE)) {
+	} else if (_pos_sp_triplet.current.type == position_setpoint_s::SETPOINT_TYPE_TAKEOFF
+		&& _control_mode.flag_control_auto_enabled && _position_setpoint_current_valid) {
 
-		// Enter this mode only if the current waypoint has valid 3D position setpoints or is of type IDLE.
-		// A setpoint of type IDLE can be published by Navigator without a valid position, and is handled here in FW_POSCTRL_MODE_AUTO.
-
-		if (doing_backtransition) {
-			_control_mode_current = FW_POSCTRL_MODE_TRANSITION_TO_HOVER_LINE_FOLLOW;
-
-		} else if (_pos_sp_triplet.current.type == position_setpoint_s::SETPOINT_TYPE_TAKEOFF) {
-
+		if (_control_mode.flag_control_position_enabled) {
 			if (_vehicle_status.is_vtol && _vehicle_status.in_transition_mode) {
 				_control_mode_current = FW_POSCTRL_MODE_AUTO;
 
@@ -420,6 +412,28 @@ FixedWingModeManager::set_control_mode_current(const hrt_abstime &now)
 					_skipping_takeoff_detection = true;
 				}
 			}
+
+		} else {
+			_control_mode_current = FW_POSCTRL_MODE_AUTO_TAKEOFF_NO_NAV;
+
+			if (previous_position_control_mode != FW_POSCTRL_MODE_AUTO_TAKEOFF && !_landed) {
+				// skip takeoff detection when switching from any other mode, auto or manual,
+				// while already in air.
+				// TODO: find a better place for / way of doing this
+				_skipping_takeoff_detection = true;
+			}
+		}
+
+
+	} else if ((_control_mode.flag_control_auto_enabled && _control_mode.flag_control_position_enabled)
+		   && (_position_setpoint_current_valid
+		       || _pos_sp_triplet.current.type == position_setpoint_s::SETPOINT_TYPE_IDLE)) {
+
+		// Enter this mode only if the current waypoint has valid 3D position setpoints or is of type IDLE.
+		// A setpoint of type IDLE can be published by Navigator without a valid position, and is handled here in FW_POSCTRL_MODE_AUTO.
+
+		if (doing_backtransition) {
+			_control_mode_current = FW_POSCTRL_MODE_TRANSITION_TO_HOVER_LINE_FOLLOW;
 
 		} else if (_pos_sp_triplet.current.type == position_setpoint_s::SETPOINT_TYPE_LAND) {
 
@@ -1058,6 +1072,213 @@ FixedWingModeManager::control_auto_path(const float control_interval, const Vect
 
 void
 FixedWingModeManager::control_auto_takeoff(const hrt_abstime &now, const float control_interval,
+		const Vector2d &global_position, const Vector2f &ground_speed, const position_setpoint_s &pos_sp_curr)
+{
+	if (!_control_mode.flag_armed) {
+		reset_takeoff_state();
+	}
+
+	// for now taking current position setpoint altitude as clearance altitude. this is the altitude we need to
+	// clear all occlusions in the takeoff path
+	const float clearance_altitude_amsl = pos_sp_curr.alt;
+
+	// set the altitude to something above the clearance altitude to ensure the vehicle climbs past the value
+	// (navigator will accept the takeoff as complete once crossing the clearance altitude)
+	const float altitude_setpoint_amsl = clearance_altitude_amsl + kClearanceAltitudeBuffer;
+
+	const Vector2f local_2D_position{_local_pos.x, _local_pos.y};
+
+	const float takeoff_airspeed = (_param_fw_tko_airspd.get() > FLT_EPSILON) ? _param_fw_tko_airspd.get() :
+				       _param_fw_airspd_min.get();
+
+	if (_runway_takeoff.runwayTakeoffEnabled()) {
+		if (!_runway_takeoff.isInitialized()) {
+			_runway_takeoff.init(now);
+			_takeoff_init_position = global_position;
+			_takeoff_ground_alt = _current_altitude;
+			_launch_current_yaw = _yaw;
+			// _airspeed_slew_rate_controller.setForcedValue(takeoff_airspeed); // TODO
+
+			events::send(events::ID("fixedwing_position_control_takeoff"), events::Log::Info, "Takeoff on runway");
+		}
+
+		if (_skipping_takeoff_detection) {
+			_runway_takeoff.forceSetFlyState();
+		}
+
+		_runway_takeoff.update(now, takeoff_airspeed, _airspeed_eas, _current_altitude - _takeoff_ground_alt,
+				       clearance_altitude_amsl - _takeoff_ground_alt);
+
+		const Vector2f start_pos_local = _global_local_proj_ref.project(_takeoff_init_position(0), _takeoff_init_position(1));
+		const Vector2f takeoff_waypoint_local = _global_local_proj_ref.project(pos_sp_curr.lat, pos_sp_curr.lon);
+
+		// by default set the takeoff bearing to the takeoff yaw, but override in a mission takeoff with bearing to takeoff WP
+		float takeoff_bearing = _launch_current_yaw;
+
+		if (_vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION) {
+			// the bearing from runway start to the takeoff waypoint is followed until the clearance altitude is exceeded
+			const Vector2f takeoff_bearing_vector = takeoff_waypoint_local - start_pos_local;
+
+			if (takeoff_bearing_vector.norm() > FLT_EPSILON) {
+				takeoff_bearing = atan2f(takeoff_bearing_vector(1), takeoff_bearing_vector(0));
+			}
+		}
+
+		const DirectionalGuidanceOutput sp = navigateLine(start_pos_local, takeoff_bearing, local_2D_position, ground_speed,
+						     _wind_vel);
+
+		fixed_wing_lateral_setpoint_s fw_lateral_ctrl_sp{empty_lateral_control_setpoint};
+		fw_lateral_ctrl_sp.timestamp = now;
+		fw_lateral_ctrl_sp.course = sp.course_setpoint;
+		fw_lateral_ctrl_sp.lateral_acceleration = sp.lateral_acceleration_feedforward;
+
+		_lateral_ctrl_sp_pub.publish(fw_lateral_ctrl_sp);
+
+		const float roll_wingtip_strike = getMaxRollAngleNearGround(_current_altitude, _takeoff_ground_alt);
+		_ctrl_configuration_handler.setLateralAccelMax(rollAngleToLateralAccel(roll_wingtip_strike));
+
+		const float pitch_max = _runway_takeoff.getMaxPitch(math::radians(_param_fw_p_lim_max.get()));
+		const float pitch_min = _runway_takeoff.getMinPitch(math::radians(_takeoff_pitch_min.get()),
+					math::radians(_param_fw_p_lim_min.get()));
+
+		const fixed_wing_longitudinal_setpoint_s fw_longitudinal_control_sp = {
+			.timestamp = now,
+			.altitude = altitude_setpoint_amsl,
+			.height_rate = NAN,
+			.equivalent_airspeed = takeoff_airspeed,
+			.pitch_direct = _runway_takeoff.getPitch(),
+			.throttle_direct = _runway_takeoff.getThrottle(_param_fw_thr_idle.get())
+		};
+
+		_longitudinal_ctrl_sp_pub.publish(fw_longitudinal_control_sp);
+
+		_ctrl_configuration_handler.setPitchMin(pitch_min);
+		_ctrl_configuration_handler.setPitchMax(pitch_max);
+		_ctrl_configuration_handler.setClimbRateTarget(_param_fw_t_clmb_max.get());
+		_ctrl_configuration_handler.setDisableUnderspeedProtection(true);
+
+		_flaps_setpoint = _param_fw_flaps_to_scl.get();
+
+		// retract ladning gear once passed the climbout state
+		if (_runway_takeoff.getState() > RunwayTakeoffState::CLIMBOUT) {
+			_new_landing_gear_position = landing_gear_s::GEAR_UP;
+		}
+
+		fixed_wing_runway_control_s fw_runway_control{};
+		fw_runway_control.timestamp = now;
+		fw_runway_control.wheel_steering_enabled = true;
+		fw_runway_control.wheel_steering_nudging_rate = _param_rwto_nudge.get() ? _manual_control_setpoint.yaw : 0.f;
+
+		_fixed_wing_runway_control_pub.publish(fw_runway_control);
+
+	} else {
+		/* Perform launch detection */
+		if (!_skipping_takeoff_detection && _param_fw_laun_detcn_on.get() &&
+		    _launchDetector.getLaunchDetected() < launch_detection_status_s::STATE_FLYING) {
+
+			if (_control_mode.flag_armed) {
+				/* Perform launch detection */
+
+				/* Detect launch using body X (forward) acceleration */
+				_launchDetector.update(control_interval, _body_acceleration_x);
+			}
+
+		} else	{
+			/* no takeoff detection --> fly */
+			_launchDetector.forceSetFlyState();
+		}
+
+		if (!_launch_detected && _launchDetector.getLaunchDetected() > launch_detection_status_s::STATE_WAITING_FOR_LAUNCH) {
+			_launch_detected = true;
+			_takeoff_init_position = global_position;
+			_takeoff_ground_alt = _current_altitude;
+			_launch_current_yaw = _yaw;
+			// _airspeed_slew_rate_controller.setForcedValue(takeoff_airspeed); // TODO
+		}
+
+		const Vector2f launch_local_position = _global_local_proj_ref.project(_takeoff_init_position(0),
+						       _takeoff_init_position(1));
+		const Vector2f takeoff_waypoint_local = _global_local_proj_ref.project(pos_sp_curr.lat, pos_sp_curr.lon);
+
+		// by default set the takeoff bearing to the takeoff yaw, but override in a mission takeoff with bearing to takeoff WP
+		float takeoff_bearing = _launch_current_yaw;
+
+		if (_vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION) {
+			// the bearing from launch to the takeoff waypoint is followed until the clearance altitude is exceeded
+			const Vector2f takeoff_bearing_vector = takeoff_waypoint_local - launch_local_position;
+
+			if (takeoff_bearing_vector.norm() > FLT_EPSILON) {
+				takeoff_bearing = atan2f(takeoff_bearing_vector(1), takeoff_bearing_vector(0));
+			}
+		}
+
+		/* Set control values depending on the detection state */
+		if (_launchDetector.getLaunchDetected() > launch_detection_status_s::STATE_WAITING_FOR_LAUNCH) {
+			/* Launch has been detected, hence we have to control the plane. */
+
+			const DirectionalGuidanceOutput sp = navigateLine(launch_local_position, takeoff_bearing, local_2D_position,
+							     ground_speed,
+							     _wind_vel);
+			fixed_wing_lateral_setpoint_s fw_lateral_ctrl_sp{empty_lateral_control_setpoint};
+			fw_lateral_ctrl_sp.timestamp = now;
+			fw_lateral_ctrl_sp.course = sp.course_setpoint;
+			fw_lateral_ctrl_sp.lateral_acceleration = sp.lateral_acceleration_feedforward;
+
+			_lateral_ctrl_sp_pub.publish(fw_lateral_ctrl_sp);
+
+			const float roll_wingtip_strike = getMaxRollAngleNearGround(_current_altitude, _takeoff_ground_alt);
+			_ctrl_configuration_handler.setLateralAccelMax(rollAngleToLateralAccel(roll_wingtip_strike));
+
+			const float max_takeoff_throttle = (_launchDetector.getLaunchDetected() < launch_detection_status_s::STATE_FLYING) ?
+							   _param_fw_thr_idle.get() : NAN;
+			const fixed_wing_longitudinal_setpoint_s fw_longitudinal_control_sp = {
+				.timestamp = now,
+				.altitude = altitude_setpoint_amsl,
+				.height_rate = NAN,
+				.equivalent_airspeed = takeoff_airspeed,
+				.pitch_direct = NAN,
+				.throttle_direct = NAN
+			};
+
+
+			_longitudinal_ctrl_sp_pub.publish(fw_longitudinal_control_sp);
+
+			_ctrl_configuration_handler.setPitchMin(radians(_takeoff_pitch_min.get()));
+			_ctrl_configuration_handler.setThrottleMax(max_takeoff_throttle);
+			_ctrl_configuration_handler.setClimbRateTarget(_param_fw_t_clmb_max.get());
+			_ctrl_configuration_handler.setDisableUnderspeedProtection(true);
+
+			//float yaw_body = _yaw; // yaw is not controlled, so set setpoint to current yaw
+
+		} else {
+			fixed_wing_lateral_setpoint_s fw_lateral_ctrl_sp{empty_lateral_control_setpoint};
+			fw_lateral_ctrl_sp.timestamp = now;
+			fw_lateral_ctrl_sp.lateral_acceleration = 0.f;
+			/* Tell the attitude controller to stop integrating while we are waiting for the launch */
+			_lateral_ctrl_sp_pub.publish(fw_lateral_ctrl_sp);
+
+			fixed_wing_longitudinal_setpoint_s long_control_sp{empty_longitudinal_control_setpoint};
+			long_control_sp.timestamp = now;
+			long_control_sp.pitch_direct = radians(_takeoff_pitch_min.get());
+			long_control_sp.throttle_direct = _param_fw_thr_idle.get();
+			_longitudinal_ctrl_sp_pub.publish(long_control_sp);
+		}
+
+		launch_detection_status_s launch_detection_status;
+		launch_detection_status.timestamp = now;
+		launch_detection_status.launch_detection_state = _launchDetector.getLaunchDetected();
+		_launch_detection_status_pub.publish(launch_detection_status);
+	}
+
+	_flaps_setpoint = _param_fw_flaps_to_scl.get();
+
+	if (!_vehicle_status.in_transition_to_fw) {
+		publishLocalPositionSetpoint(pos_sp_curr);
+	}
+}
+
+void
+FixedWingModeManager::control_auto_fw_takeoff(const hrt_abstime &now, const float control_interval,
 		const Vector2d &global_position, const Vector2f &ground_speed, const position_setpoint_s &pos_sp_curr)
 {
 	if (!_control_mode.flag_armed) {
@@ -2032,7 +2253,7 @@ FixedWingModeManager::Run()
 			reset_landing_state();
 		}
 
-		if (_control_mode_current != FW_POSCTRL_MODE_AUTO_TAKEOFF) {
+		if (_control_mode_current != FW_POSCTRL_MODE_AUTO_TAKEOFF && _control_mode_current != FW_POSCTRL_MODE_AUTO_TAKEOFF_NO_NAV) {
 			reset_takeoff_state();
 		}
 
@@ -2074,6 +2295,11 @@ FixedWingModeManager::Run()
 
 		case FW_POSCTRL_MODE_AUTO_TAKEOFF: {
 				control_auto_takeoff(now, control_interval, curr_pos, ground_speed, _pos_sp_triplet.current);
+				break;
+			}
+
+		case FW_POSCTRL_MODE_AUTO_TAKEOFF_NO_NAV: {
+				control_auto_takeoff_no_nav(_local_pos.timestamp, control_interval, _pos_sp_triplet.current.alt);
 				break;
 			}
 

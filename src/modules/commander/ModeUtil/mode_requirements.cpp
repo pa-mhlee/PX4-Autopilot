@@ -137,6 +137,11 @@ void getModeRequirements(uint8_t vehicle_type, failsafe_flags_s &flags)
 	setRequirement(vehicle_status_s::NAVIGATION_STATE_ACRO, flags.mode_req_angular_velocity);
 	setRequirement(vehicle_status_s::NAVIGATION_STATE_ACRO, flags.mode_req_manual_control);
 
+	// NAVIGATION_STATE_AUTO_TAKEOFF_NO_NAV
+	setRequirement(vehicle_status_s::NAVIGATION_STATE_AUTO_TAKEOFF_NO_NAV, flags.mode_req_angular_velocity);
+	setRequirement(vehicle_status_s::NAVIGATION_STATE_AUTO_TAKEOFF_NO_NAV, flags.mode_req_attitude);
+	setRequirement(vehicle_status_s::NAVIGATION_STATE_AUTO_TAKEOFF_NO_NAV, flags.mode_req_local_alt);
+
 	// NAVIGATION_STATE_DESCEND
 	setRequirement(vehicle_status_s::NAVIGATION_STATE_DESCEND, flags.mode_req_angular_velocity);
 	setRequirement(vehicle_status_s::NAVIGATION_STATE_DESCEND, flags.mode_req_attitude);
