@@ -97,6 +97,7 @@ void FlightTaskManualAltitude::_scaleSticks()
 
 void FlightTaskManualAltitude::_updateAltitudeLock()
 {
+	_jake_debug_data = {};
 	// Depending on stick inputs and velocity, position is locked.
 	// If not locked, altitude setpoint is set to NAN.
 
@@ -105,6 +106,9 @@ void FlightTaskManualAltitude::_updateAltitudeLock()
 
 	// Check if vehicle has stopped
 	const bool stopped = (_param_mpc_hold_max_z.get() < FLT_EPSILON || fabsf(_velocity(2)) < _param_mpc_hold_max_z.get());
+
+	_jake_debug_data.apply_brake = apply_brake;
+	_jake_debug_data.stopped = stopped;
 
 	// Manage transition between use of distance to ground and distance to local origin
 	// when terrain hold behaviour has been selected.
@@ -116,8 +120,11 @@ void FlightTaskManualAltitude::_updateAltitudeLock()
 		float stick_xy = Vector2f(_sticks.getPitchRollExpo()).length();
 		bool stick_input = stick_xy > 0.001f;
 
+		_jake_debug_data.stick_input = stick_input;
+
 		if (_terrain_hold) {
 			bool too_fast = spd_xy > _param_mpc_hold_max_xy.get();
+			_jake_debug_data.too_fast = too_fast;
 
 			if (stick_input || too_fast || !PX4_ISFINITE(_dist_to_bottom)) {
 				// Stop using distance to ground
@@ -135,6 +142,7 @@ void FlightTaskManualAltitude::_updateAltitudeLock()
 
 		} else {
 			bool not_moving = spd_xy < 0.5f * _param_mpc_hold_max_xy.get() && stopped;
+			_jake_debug_data.not_moving = not_moving;
 
 			if (!stick_input && not_moving && PX4_ISFINITE(_dist_to_bottom)) {
 				// Start using distance to ground
@@ -185,6 +193,10 @@ void FlightTaskManualAltitude::_updateAltitudeLock()
 	}
 
 	_respectMaxAltitude();
+
+	_jake_debug_data.dist_to_ground_lock = _dist_to_ground_lock;
+	_jake_debug_data.terrain_hold = _terrain_hold;
+
 }
 
 void FlightTaskManualAltitude::_respectMinAltitude()
@@ -207,6 +219,7 @@ void FlightTaskManualAltitude::_terrainFollowing(bool apply_brake, bool stopped)
 		_respectMinAltitude();
 		// lock distance to ground but adjust first for minimum altitude
 		_dist_to_ground_lock = _dist_to_bottom - (_position_setpoint(2) - _position(2));
+		_jake_debug_data.terrain_following = 1;
 
 	} else if (apply_brake && PX4_ISFINITE(_dist_to_ground_lock)) {
 		// vehicle needs to follow terrain
@@ -215,10 +228,13 @@ void FlightTaskManualAltitude::_terrainFollowing(bool apply_brake, bool stopped)
 		const float delta_distance_to_ground = _dist_to_ground_lock - _dist_to_bottom;
 		// adjust position setpoint for the delta (note: NED frame)
 		_position_setpoint(2) = _position(2) - delta_distance_to_ground;
+		_jake_debug_data.terrain_following = 2;
+
 
 	} else {
 		// user demands velocity change in D-direction
 		_dist_to_ground_lock = _position_setpoint(2) = NAN;
+		_jake_debug_data.terrain_following = 3;
 	}
 }
 
@@ -279,6 +295,9 @@ void FlightTaskManualAltitude::_updateSetpoints()
 				      _yaw_setpoint);
 	_updateAltitudeLock();
 	_respectGroundSlowdown();
+
+	_jake_debug_data.timestamp = hrt_absolute_time();
+	_jake_debug_pub.publish(_jake_debug_data);
 }
 
 bool FlightTaskManualAltitude::_checkTakeoff()

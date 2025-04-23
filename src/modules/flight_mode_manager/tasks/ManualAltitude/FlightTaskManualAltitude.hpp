@@ -44,6 +44,8 @@
 #include "Sticks.hpp"
 #include "StickTiltXY.hpp"
 #include <uORB/Subscription.hpp>
+#include <uORB/Publication.hpp>
+#include <uORB/topics/jake_debug.h>
 
 class FlightTaskManualAltitude : public FlightTask
 {
@@ -135,4 +137,7 @@ private:
 	 * _dist_to_ground_lock.
 	 */
 	float _dist_to_ground_lock = NAN;
+
+	jake_debug_s _jake_debug_data{};
+	uORB::Publication<jake_debug_s> _jake_debug_pub{ORB_ID(jake_debug)};
 };
