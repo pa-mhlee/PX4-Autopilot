@@ -179,6 +179,14 @@ private:
 	const float _vel_noise_density = 0.2f;      // Velocity noise process density
 	const float _vel_markov_time = 0.85f;       // Velocity Markov process coefficient
 
+	// Barometer noise model
+	float _baro_pressure_noise = 0.0f;
+	const float _baro_random_walk = 0.3f;       // Baro random walk coefficient
+	const float _baro_markov_time = 0.98f;      // Baro Markov process coefficient
+	const float _baro_noise_amplitude = 15.0f;  // Pressure noise amplitude [Pa] (roughly 1.6 meters)
+
+	bool _clock_received = false;
+
 	DEFINE_PARAMETERS(
 		(ParamInt<px4::params::SIM_GPS_USED>) _sim_gps_used
 	)

@@ -71,6 +71,16 @@ int GZBridge::init()
 		return PX4_ERROR;
 	}
 
+	// TODO: figure out wtf is going on here -- why does a 0 timestamp break vehicle_imu?
+	// Spin and wait for first clock message
+	while (1) {
+		if (_clock_received) {
+			PX4_INFO("clock received");
+			break;
+		}
+		px4_usleep(100000);
+	}
+
 	// pose: /world/$WORLD/pose/info
 	std::string world_pose_topic = "/world/" + _world_name + "/pose/info";
 
@@ -194,6 +204,8 @@ void GZBridge::clockCallback(const gz::msgs::Clock &msg)
 		// Keep monotonic clock synchronized
 		px4_clock_settime(CLOCK_MONOTONIC, &ts);
 	}
+
+	_clock_received = true;
 }
 
 void GZBridge::opticalFlowCallback(const px4::msgs::OpticalFlow &msg)
@@ -260,6 +272,11 @@ void GZBridge::airPressureCallback(const gz::msgs::FluidPressure &msg)
 {
 	const uint64_t timestamp = hrt_absolute_time();
 
+	// Apply random walk to barometer data
+	_baro_pressure_noise = _baro_markov_time * _baro_pressure_noise +
+	                      _baro_random_walk * generate_wgn() * _baro_noise_amplitude -
+	                      0.02f * _baro_pressure_noise;
+
 	device::Device::DeviceId id{};
 	id.devid_s.bus_type = device::Device::DeviceBusType::DeviceBusType_SIMULATION;
 	id.devid_s.devtype = DRV_BARO_DEVTYPE_BAROSIM;
@@ -270,11 +287,12 @@ void GZBridge::airPressureCallback(const gz::msgs::FluidPressure &msg)
 	report.timestamp = timestamp;
 	report.timestamp_sample = timestamp;
 	report.device_id = id.devid;
-	report.pressure = msg.pressure();
+
+	// Apply noise to pressure
+	report.pressure = (float)msg.pressure() + _baro_pressure_noise;
 	report.temperature = this->_temperature;
 	_sensor_baro_pub.publish(report);
 }
-
 
 void GZBridge::airspeedCallback(const gz::msgs::AirSpeed &msg)
 {
