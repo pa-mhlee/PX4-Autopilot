@@ -75,7 +75,7 @@ public:
 	~AckermannPosControl() = default;
 
 	/**
-	 * @brief Update position control
+	 * @brief Generate and publish roverVelocitySetpoint from roverPositionSetpoint.
 	 */
 	void updatePosControl();
 
@@ -98,10 +98,7 @@ public:
 	/**
 	 * @brief Reset position controller.
 	 */
-	void reset()
-	{
-		_pos_ctl_course_direction = Vector2f(NAN, NAN);
-	};
+	void reset() {_pos_ctl_course_direction = Vector2f(NAN, NAN);};
 
 protected:
 	/**
@@ -173,15 +170,17 @@ private:
 	// Variables
 	Quatf _vehicle_attitude_quaternion{};
 	Vector2f _curr_pos_ned{};
-	Vector2f _pos_ctl_course_direction{};
-	Vector2f _pos_ctl_start_position_ned{};
 	Vector2f _start_ned{};
 	float _vehicle_yaw{0.f};
 	float _max_yaw_rate{0.f};
 	float _min_speed{0.f}; // Speed at which the maximum yaw rate limit is enforced given the maximum steer angle and wheel base.
 	int _curr_wp_type{position_setpoint_s::SETPOINT_TYPE_IDLE};
 
-	// Waypoint variables
+	// Manual position mode variables
+	Vector2f _pos_ctl_course_direction{};
+	Vector2f _pos_ctl_start_position_ned{};
+
+	// Auto Mode Variables
 	Vector2f _curr_wp_ned{};
 	Vector2f _prev_wp_ned{};
 	Vector2f _next_wp_ned{};

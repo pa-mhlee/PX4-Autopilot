@@ -69,9 +69,14 @@ public:
 	void updateActControl();
 
 	/**
-	 * @brief Manual mode
+	 * @brief Publish roverThrottleSetpoint and roverSteeringSetpoint from manualControlSetpoint.
 	 */
-	void manualMode();
+	void manualManualMode();
+
+	/**
+	 * @brief Stop the vehicle by sending 0 commands to motors and servos.
+	 */
+	void stopVehicle();
 
 protected:
 	/**
@@ -96,7 +101,8 @@ private:
 
 	// Variables
 	hrt_abstime _timestamp{0};
-	float _dt{0.f};
+	float _throttle_setpoint{NAN};
+	float _steering_setpoint{NAN};
 
 	// Controllers
 	SlewRate<float> _servo_setpoint{0.f};

@@ -68,9 +68,9 @@ void AckermannPosControl::updatePosControl()
 	}
 
 	const Vector2f target_waypoint_ned(_rover_position_setpoint.position_ned[0], _rover_position_setpoint.position_ned[1]);
-	const float distance_to_target = (target_waypoint_ned - _curr_pos_ned).norm();
+	float distance_to_target = target_waypoint_ned.isAllFinite() ? (target_waypoint_ned - _curr_pos_ned).norm() : NAN;
 
-	if (distance_to_target > _param_nav_acc_rad.get()) {
+	if (PX4_ISFINITE(distance_to_target) && distance_to_target > _param_nav_acc_rad.get()) {
 
 		float arrival_speed = PX4_ISFINITE(_rover_position_setpoint.arrival_speed) ? _rover_position_setpoint.arrival_speed :
 				      0.f;
