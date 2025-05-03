@@ -45,6 +45,13 @@
 #include "StickTiltXY.hpp"
 #include <uORB/Subscription.hpp>
 
+enum class AltitudeMode : int {
+	AltitudeFollow,
+	TerrainFollow,
+	TerrainHold,
+	None,
+};
+
 class FlightTaskManualAltitude : public FlightTask
 {
 public:
@@ -94,6 +101,10 @@ protected:
 					_param_mpc_tko_speed /**< desired upwards speed when still close to the ground */
 				       )
 private:
+
+	void handle_terrain_hold_mode();
+	void handle_terrain_follow_mode();
+	void handle_altitude_follow_mode();
 	/**
 	 * Terrain following.
 	 * During terrain following, the position setpoint is adjusted
@@ -132,7 +143,9 @@ private:
 	 * Distance to ground during terrain following.
 	 * If user does not demand velocity change in D-direction and the vehcile
 	 * is in terrain-following mode, then height to ground will be locked to
-	 * _dist_to_ground_lock.
+	 * _dist_to_bottom_lock.
 	 */
-	float _dist_to_ground_lock = NAN;
+	float _dist_to_bottom_lock = NAN;
+
+	AltitudeMode _current_mode = AltitudeMode::AltitudeFollow;
 };
