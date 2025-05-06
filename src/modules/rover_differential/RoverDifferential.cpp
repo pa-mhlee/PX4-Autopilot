@@ -39,6 +39,10 @@ RoverDifferential::RoverDifferential() :
 	ModuleParams(nullptr),
 	ScheduledWorkItem(MODULE_NAME, px4::wq_configurations::rate_ctrl)
 {
+	_rover_rate_setpoint_pub.advertise();
+	_rover_attitude_setpoint_pub.advertise();
+	_rover_velocity_setpoint_pub.advertise();
+	_rover_position_setpoint_pub.advertise();
 	updateParams();
 }
 
@@ -56,33 +60,179 @@ void RoverDifferential::updateParams()
 void RoverDifferential::Run()
 {
 	if (_parameter_update_sub.updated()) {
+		parameter_update_s param_update{};
+		_parameter_update_sub.copy(&param_update);
 		updateParams();
+		runSanityChecks();
 	}
-
-	_differential_pos_control.updatePosControl();
-	_differential_vel_control.updateVelControl();
-	_differential_att_control.updateAttControl();
-	_differential_rate_control.updateRateControl();
 
 	if (_vehicle_control_mode_sub.updated()) {
-		_vehicle_control_mode_sub.copy(&_vehicle_control_mode);
+		vehicle_control_mode_s vehicle_control_mode{};
+		_vehicle_control_mode_sub.copy(&vehicle_control_mode);
+
+		// Run sanity checks if the control mode changes (Note: This has to be done this way, because the topic is periodically updated and not on changes)
+		if (vehicle_control_mode.flag_control_position_enabled != _vehicle_control_mode.flag_control_position_enabled ||
+		    vehicle_control_mode.flag_control_velocity_enabled != _vehicle_control_mode.flag_control_velocity_enabled ||
+		    vehicle_control_mode.flag_control_attitude_enabled != _vehicle_control_mode.flag_control_attitude_enabled ||
+		    vehicle_control_mode.flag_control_rates_enabled != _vehicle_control_mode.flag_control_rates_enabled) {
+			_vehicle_control_mode = vehicle_control_mode;
+			runSanityChecks();
+
+		} else {
+			_vehicle_control_mode = vehicle_control_mode;
+		}
+
 	}
 
-	const bool full_manual_mode_enabled = _vehicle_control_mode.flag_control_manual_enabled
-					      && !_vehicle_control_mode.flag_control_position_enabled && !_vehicle_control_mode.flag_control_attitude_enabled
-					      && !_vehicle_control_mode.flag_control_rates_enabled;
+	if (_vehicle_status_sub.updated()) {
+		vehicle_status_s vehicle_status{};
+		_vehicle_status_sub.copy(&vehicle_status);
 
-	if (full_manual_mode_enabled) { // Manual mode
-		_differential_act_control.manualManualMode();
+		// Reset all controllers if the navigation state changes
+		if (vehicle_status.nav_state != _nav_state) {
+			_differential_pos_control.reset();
+			_differential_vel_control.reset();
+			_differential_att_control.reset();
+			_differential_rate_control.reset();
+		}
+
+		_nav_state = vehicle_status.nav_state;
 	}
 
-	if (_vehicle_control_mode.flag_armed) {
-		_differential_act_control.updateActControl();
+	if (_vehicle_control_mode.flag_armed && _sanity_checks_passed) {
+		// Generate setpoints
+		if (_vehicle_control_mode.flag_control_manual_enabled) {
+			manualControl();
 
-	} else {
+		} else if (_vehicle_control_mode.flag_control_auto_enabled) {
+			_differential_pos_control.autoPositionMode();
+
+		} else if (_vehicle_control_mode.flag_control_offboard_enabled) {
+			offboardControl();
+		}
+
+		updateControllers();
+
+	} else if (_was_armed) { // Reset all controllers and stop the vehicle
+		_differential_pos_control.reset();
+		_differential_vel_control.reset();
+		_differential_att_control.reset();
+		_differential_rate_control.reset();
 		_differential_act_control.stopVehicle();
+		_was_armed = false;
 	}
 
+}
+
+void RoverDifferential::manualControl()
+{
+	switch (_nav_state) {
+	case vehicle_status_s::NAVIGATION_STATE_MANUAL:
+		_differential_act_control.manualManualMode();
+		break;
+
+	case vehicle_status_s::NAVIGATION_STATE_ACRO:
+		_differential_rate_control.manualAcroMode();
+		break;
+
+	case vehicle_status_s::NAVIGATION_STATE_STAB:
+		_differential_att_control.manualStabMode();
+		break;
+
+	case vehicle_status_s::NAVIGATION_STATE_POSCTL:
+		_differential_pos_control.manualPositionMode();
+		break;
+	}
+}
+
+void RoverDifferential::offboardControl()
+{
+	offboard_control_mode_s offboard_control_mode{};
+	_offboard_control_mode_sub.copy(&offboard_control_mode);
+
+	trajectory_setpoint_s trajectory_setpoint{};
+	_trajectory_setpoint_sub.copy(&trajectory_setpoint);
+
+	if (offboard_control_mode.position) {
+		rover_position_setpoint_s rover_position_setpoint{};
+		rover_position_setpoint.timestamp = hrt_absolute_time();
+		rover_position_setpoint.position_ned[0] = trajectory_setpoint.position[0];
+		rover_position_setpoint.position_ned[1] = trajectory_setpoint.position[1];
+		rover_position_setpoint.start_ned[0] = NAN;
+		rover_position_setpoint.start_ned[1] = NAN;
+		rover_position_setpoint.cruising_speed = NAN;
+		rover_position_setpoint.arrival_speed = NAN;
+		rover_position_setpoint.yaw = NAN;
+		_rover_position_setpoint_pub.publish(rover_position_setpoint);
+
+	} else if (offboard_control_mode.velocity) {
+		const Vector2f velocity_ned(trajectory_setpoint.velocity[0], trajectory_setpoint.velocity[1]);
+		rover_velocity_setpoint_s rover_velocity_setpoint{};
+		rover_velocity_setpoint.timestamp = hrt_absolute_time();
+		rover_velocity_setpoint.speed = velocity_ned.norm();
+		rover_velocity_setpoint.bearing = atan2f(velocity_ned(1), velocity_ned(0));
+		_rover_velocity_setpoint_pub.publish(rover_velocity_setpoint);
+
+	} else if (offboard_control_mode.attitude) {
+		rover_attitude_setpoint_s rover_attitude_setpoint{};
+		rover_attitude_setpoint.timestamp = hrt_absolute_time();
+		rover_attitude_setpoint.yaw_setpoint = trajectory_setpoint.yaw;
+		_rover_attitude_setpoint_pub.publish(rover_attitude_setpoint);
+
+	} else if (offboard_control_mode.body_rate) {
+		rover_rate_setpoint_s rover_rate_setpoint{};
+		rover_rate_setpoint.timestamp = hrt_absolute_time();
+		rover_rate_setpoint.yaw_rate_setpoint = trajectory_setpoint.yawspeed;
+		_rover_rate_setpoint_pub.publish(rover_rate_setpoint);
+	}
+}
+
+void RoverDifferential::updateControllers()
+{
+	if (_vehicle_control_mode.flag_control_position_enabled) {
+		_differential_pos_control.updatePosControl();
+	}
+
+	if (_vehicle_control_mode.flag_control_velocity_enabled) {
+		_differential_vel_control.updateVelControl();
+	}
+
+	if (_vehicle_control_mode.flag_control_attitude_enabled) {
+		_differential_att_control.updateAttControl();
+	}
+
+	if (_vehicle_control_mode.flag_control_rates_enabled) {
+		_differential_rate_control.updateRateControl();
+	}
+
+	if (_vehicle_control_mode.flag_control_allocation_enabled) {
+		_differential_act_control.updateActControl();
+	}
+}
+
+void RoverDifferential::runSanityChecks()
+{
+	if (_vehicle_control_mode.flag_control_rates_enabled && !_differential_rate_control.runSanityChecks()) {
+		_sanity_checks_passed = false;
+		return;
+	}
+
+	if (_vehicle_control_mode.flag_control_attitude_enabled && !_differential_att_control.runSanityChecks()) {
+		_sanity_checks_passed = false;
+		return;
+	}
+
+	if (_vehicle_control_mode.flag_control_velocity_enabled && !_differential_vel_control.runSanityChecks()) {
+		_sanity_checks_passed = false;
+		return;
+	}
+
+	if (_vehicle_control_mode.flag_control_position_enabled && !_differential_pos_control.runSanityChecks()) {
+		_sanity_checks_passed = false;
+		return;
+	}
+
+	_sanity_checks_passed = true;
 }
 
 int RoverDifferential::task_spawn(int argc, char *argv[])

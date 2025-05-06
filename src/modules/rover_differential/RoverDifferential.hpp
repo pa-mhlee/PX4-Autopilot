@@ -42,8 +42,16 @@
 
 // uORB includes
 #include <uORB/Subscription.hpp>
+#include <uORB/Publication.hpp>
 #include <uORB/topics/parameter_update.h>
 #include <uORB/topics/vehicle_control_mode.h>
+#include <uORB/topics/vehicle_status.h>
+#include <uORB/topics/rover_rate_setpoint.h>
+#include <uORB/topics/rover_attitude_setpoint.h>
+#include <uORB/topics/rover_velocity_setpoint.h>
+#include <uORB/topics/rover_position_setpoint.h>
+#include <uORB/topics/offboard_control_mode.h>
+#include <uORB/topics/trajectory_setpoint.h>
 
 // Local includes
 #include "DifferentialActControl/DifferentialActControl.hpp"
@@ -82,10 +90,43 @@ protected:
 private:
 	void Run() override;
 
+	/**
+	 * @brief Handle manual control
+	 */
+	void manualControl();
+
+	/**
+	 * @brief Translate trajectorySetpoint to roverSetpoints and publish them
+	 */
+	void offboardControl();
+
+	/**
+	 * @brief Update the controllers
+	 */
+	void updateControllers();
+
+	/**
+	 * @brief Check proper parameter setup for the controllers
+	 *
+	 * Modifies:
+	 *
+	 *   - _sanity_checks_passed: true if checks for all active controllers pass
+	 */
+	void runSanityChecks();
+
 	// uORB subscriptions
 	uORB::Subscription _parameter_update_sub{ORB_ID(parameter_update)};
 	uORB::Subscription _vehicle_control_mode_sub{ORB_ID(vehicle_control_mode)};
+	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};
+	uORB::Subscription _offboard_control_mode_sub{ORB_ID(offboard_control_mode)};
+	uORB::Subscription _trajectory_setpoint_sub{ORB_ID(trajectory_setpoint)};
 	vehicle_control_mode_s _vehicle_control_mode{};
+
+	// uORB publications
+	uORB::Publication<rover_rate_setpoint_s> _rover_rate_setpoint_pub{ORB_ID(rover_rate_setpoint)};
+	uORB::Publication<rover_attitude_setpoint_s> _rover_attitude_setpoint_pub{ORB_ID(rover_attitude_setpoint)};
+	uORB::Publication<rover_velocity_setpoint_s> _rover_velocity_setpoint_pub{ORB_ID(rover_velocity_setpoint)};
+	uORB::Publication<rover_position_setpoint_s> _rover_position_setpoint_pub{ORB_ID(rover_position_setpoint)};
 
 	// Class instances
 	DifferentialActControl _differential_act_control{this};
@@ -93,4 +134,9 @@ private:
 	DifferentialAttControl _differential_att_control{this};
 	DifferentialVelControl _differential_vel_control{this};
 	DifferentialPosControl _differential_pos_control{this};
+
+	// Variables
+	int _nav_state{0}; // Navigation state of the vehicle
+	bool _sanity_checks_passed{true}; // True if checks for all active controllers pass
+	bool _was_armed{false}; // True if the vehicle was armed before the last reset
 };
