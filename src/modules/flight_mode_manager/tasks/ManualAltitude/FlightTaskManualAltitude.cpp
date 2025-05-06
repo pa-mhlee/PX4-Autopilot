@@ -131,6 +131,10 @@ void FlightTaskManualAltitude::_updateAltitudeLock()
 
 void FlightTaskManualAltitude::handle_terrain_hold_mode()
 {
+	// TODO:
+	// - check dist_bottom_valid before using dist_bottom
+	// - use dist_bottom_var as heuristic for distance lock
+
 	if (!PX4_ISFINITE(_dist_to_bottom)) {
 		// Cannot perform terrain hold without distance sensor
 		// TODO: log error?
