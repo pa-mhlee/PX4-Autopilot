@@ -83,7 +83,8 @@ protected:
 	StickYaw _stick_yaw{this};
 
 	bool _sticks_data_required = true; ///< let inherited task-class define if it depends on stick data
-	bool _terrain_hold{false}; /**< true when vehicle is controlling height above a static ground position */
+	// bool _terrain_hold{false}; /**< true when vehicle is controlling height above a static ground position */
+	AltitudeMode _current_mode = AltitudeMode::AltitudeFollow;
 
 	float _velocity_constraint_up{INFINITY};
 	float _velocity_constraint_down{INFINITY};
@@ -146,6 +147,4 @@ private:
 	 * _dist_to_bottom_lock.
 	 */
 	float _dist_to_bottom_lock = NAN;
-
-	AltitudeMode _current_mode = AltitudeMode::AltitudeFollow;
 };

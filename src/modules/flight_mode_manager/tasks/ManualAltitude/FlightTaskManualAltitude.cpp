@@ -141,14 +141,14 @@ void FlightTaskManualAltitude::handle_terrain_hold_mode()
 		return;
 	}
 
-	// Check if user is adjusting Z velocity (throttle non zero)
+	// Check if user is adjusting throttle, velocity setpoint mode
 	if (fabsf(_sticks.getPositionExpo()(2)) > 0.001f) {
 		// PX4_INFO("USER IN CONTROL");
 		if (PX4_ISFINITE(_position_setpoint(2)) || PX4_ISFINITE(_dist_to_bottom_lock)) {
 			PX4_INFO("Setting position sp to NAN");
+			_current_mode = AltitudeMode::None;
 			_position_setpoint(2) = NAN;
 			_dist_to_bottom_lock = NAN;
-			_current_mode = AltitudeMode::None;
 		}
 
 		return;
@@ -159,13 +159,12 @@ void FlightTaskManualAltitude::handle_terrain_hold_mode()
 	bool xy_vel_okay = Vector2f(_velocity).length() < _param_mpc_hold_max_xy.get();
 
 	if (z_vel_okay && xy_vel_okay) {
-		// Terrain Hold -- XYZ all within limit for Terrain Hold
+		// XYZ all within limit for Terrain Hold
 		// Update position setpoint to keep fixed distance from terrain
 		if (_current_mode != AltitudeMode::TerrainHold) {
 			_current_mode = AltitudeMode::TerrainHold;
 			// Lock to dist_to_bottom
-			PX4_INFO("Locking to dist bottom");
-			// _dist_to_bottom_lock = math::min(_dist_to_bottom, _min_distance_to_ground);
+			PX4_INFO("Locking to dist bottom: %f", (double)_dist_to_bottom);
 			_dist_to_bottom_lock = _dist_to_bottom;
 			_position_setpoint(2) = _position(2);
 
@@ -174,12 +173,16 @@ void FlightTaskManualAltitude::handle_terrain_hold_mode()
 			if (PX4_ISFINITE(_dist_to_bottom_lock)) {
 				float delta_distance = _dist_to_bottom - _dist_to_bottom_lock;
 				// PX4_INFO("Updating setpoint: delta_distance %f", (double)delta_distance);
+				// PX4_INFO("delta_distance: %f", (double)delta_distance);
 				_position_setpoint(2) = _position(2) + delta_distance;
+				// PX4_INFO("_position_setpoint(2): %f", (double)_position_setpoint(2));
+			} else {
+				PX4_INFO("_dist_to_bottom_lock is NAN, this shouldn't happen");
 			}
 		}
 
-	} else if (z_vel_okay) {
-		// Altitude Hold -- XY too fast, follow Z estimate altitude
+	} else {
+		// Either Z_vel or XY_vel are above threshold, just follow altitude setpoint
 		// Lock the position setpoint to the current Z position estimate
 		if (_current_mode != AltitudeMode::AltitudeFollow) {
 			_current_mode = AltitudeMode::AltitudeFollow;
@@ -191,12 +194,6 @@ void FlightTaskManualAltitude::handle_terrain_hold_mode()
 			// Nothing to do, we do not adjust the setpoint
 		}
 
-	} else {
-		// No Z Hold -- Z too fast, user is in control
-		// Set position setpoint to NAN
-		_current_mode = AltitudeMode::None;
-		_position_setpoint(2) = NAN;
-		_dist_to_bottom_lock = NAN;
 	}
 }
 
@@ -386,6 +383,7 @@ void FlightTaskManualAltitude::_ekfResetHandlerHeading(float delta_psi)
 
 void FlightTaskManualAltitude::_ekfResetHandlerHagl(float delta_hagl)
 {
+	PX4_INFO("_ekfResetHandlerHagl");
 	_dist_to_bottom_lock = NAN;
 }
 
