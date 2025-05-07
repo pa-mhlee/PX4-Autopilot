@@ -55,77 +55,6 @@ void MecanumPosControl::updatePosControl()
 {
 	updateSubscriptions();
 
-	if (_vehicle_control_mode.flag_control_position_enabled && _vehicle_control_mode.flag_armed && runSanityChecks()) {
-		if (_vehicle_control_mode.flag_control_offboard_enabled) {
-			offboardPositionMode();
-
-		} else if (_vehicle_control_mode.flag_control_manual_enabled && _vehicle_control_mode.flag_control_position_enabled) {
-			manualPositionMode();
-
-		} else if (_vehicle_control_mode.flag_control_auto_enabled) {
-			autoPositionMode();
-
-		}
-
-		generateVelocitySetpoint();
-
-	}
-}
-
-void MecanumPosControl::updateSubscriptions()
-{
-	if (_vehicle_control_mode_sub.updated()) {
-		_vehicle_control_mode_sub.copy(&_vehicle_control_mode);
-	}
-
-	if (_vehicle_attitude_sub.updated()) {
-		vehicle_attitude_s vehicle_attitude{};
-		_vehicle_attitude_sub.copy(&vehicle_attitude);
-		_vehicle_attitude_quaternion = matrix::Quatf(vehicle_attitude.q);
-		_vehicle_yaw = matrix::Eulerf(_vehicle_attitude_quaternion).psi();
-	}
-
-	if (_vehicle_local_position_sub.updated()) {
-		vehicle_local_position_s vehicle_local_position{};
-		_vehicle_local_position_sub.copy(&vehicle_local_position);
-
-		if (!_global_ned_proj_ref.isInitialized()
-		    || (_global_ned_proj_ref.getProjectionReferenceTimestamp() != vehicle_local_position.ref_timestamp)) {
-			_global_ned_proj_ref.initReference(vehicle_local_position.ref_lat, vehicle_local_position.ref_lon,
-							   vehicle_local_position.ref_timestamp);
-		}
-
-		_curr_pos_ned = Vector2f(vehicle_local_position.x, vehicle_local_position.y);
-	}
-
-}
-
-void MecanumPosControl::offboardPositionMode()
-{
-	if (_offboard_control_mode_sub.updated()) {
-		_offboard_control_mode_sub.copy(&_offboard_control_mode);
-	}
-
-	if (!_offboard_control_mode.position) {
-		return;
-	}
-
-	trajectory_setpoint_s trajectory_setpoint{};
-	_trajectory_setpoint_sub.copy(&trajectory_setpoint);
-
-	// Translate trajectory setpoint to rover position setpoint
-	rover_position_setpoint_s rover_position_setpoint{};
-	rover_position_setpoint.timestamp = hrt_absolute_time();
-	rover_position_setpoint.position_ned[0] = trajectory_setpoint.position[0];
-	rover_position_setpoint.position_ned[1] = trajectory_setpoint.position[1];
-	rover_position_setpoint.cruising_speed = _param_ro_speed_limit.get();
-	rover_position_setpoint.yaw = _vehicle_yaw;
-	_rover_position_setpoint_pub.publish(rover_position_setpoint);
-
-}
-
-void MecanumPosControl::generateVelocitySetpoint()
-{
 	hrt_abstime timestamp = hrt_absolute_time();
 
 	if (_rover_position_setpoint_sub.updated()) {
@@ -176,11 +105,36 @@ void MecanumPosControl::generateVelocitySetpoint()
 		rover_velocity_setpoint.yaw = _vehicle_yaw;
 		_rover_velocity_setpoint_pub.publish(rover_velocity_setpoint);
 	}
+}
+
+void MecanumPosControl::updateSubscriptions()
+{
+	if (_vehicle_attitude_sub.updated()) {
+		vehicle_attitude_s vehicle_attitude{};
+		_vehicle_attitude_sub.copy(&vehicle_attitude);
+		_vehicle_attitude_quaternion = matrix::Quatf(vehicle_attitude.q);
+		_vehicle_yaw = matrix::Eulerf(_vehicle_attitude_quaternion).psi();
+	}
+
+	if (_vehicle_local_position_sub.updated()) {
+		vehicle_local_position_s vehicle_local_position{};
+		_vehicle_local_position_sub.copy(&vehicle_local_position);
+
+		if (!_global_ned_proj_ref.isInitialized()
+		    || (_global_ned_proj_ref.getProjectionReferenceTimestamp() != vehicle_local_position.ref_timestamp)) {
+			_global_ned_proj_ref.initReference(vehicle_local_position.ref_lat, vehicle_local_position.ref_lon,
+							   vehicle_local_position.ref_timestamp);
+		}
+
+		_curr_pos_ned = Vector2f(vehicle_local_position.x, vehicle_local_position.y);
+	}
 
 }
 
 void MecanumPosControl::manualPositionMode()
 {
+	updateSubscriptions();
+
 	manual_control_setpoint_s manual_control_setpoint{};
 	_manual_control_setpoint_sub.copy(&manual_control_setpoint);
 
@@ -323,6 +277,5 @@ bool MecanumPosControl::runSanityChecks()
 		ret = false;
 	}
 
-	_prev_param_check_passed = ret;
 	return ret;
 }

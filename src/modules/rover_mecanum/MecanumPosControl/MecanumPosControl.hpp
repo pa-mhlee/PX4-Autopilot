@@ -39,9 +39,7 @@
 
 // Libraries
 #include <lib/rover_control/RoverControl.hpp>
-#include <lib/pid/PID.hpp>
 #include <matrix/matrix/math.hpp>
-#include <lib/slew_rate/SlewRate.hpp>
 #include <lib/pure_pursuit/PurePursuit.hpp>
 #include <lib/geo/geo.h>
 #include <math.h>
@@ -51,11 +49,8 @@
 #include <uORB/Subscription.hpp>
 #include <uORB/topics/rover_velocity_setpoint.h>
 #include <uORB/topics/rover_position_setpoint.h>
-#include <uORB/topics/vehicle_control_mode.h>
 #include <uORB/topics/manual_control_setpoint.h>
-#include <uORB/topics/trajectory_setpoint.h>
 #include <uORB/topics/vehicle_attitude.h>
-#include <uORB/topics/offboard_control_mode.h>
 #include <uORB/topics/position_setpoint.h>
 #include <uORB/topics/position_setpoint_triplet.h>
 #include <uORB/topics/vehicle_local_position.h>
@@ -77,9 +72,30 @@ public:
 	~MecanumPosControl() = default;
 
 	/**
-	 * @brief Update position controller.
+	 * @brief Generate and publish roverVelocitySetpoint from roverPositionSetpoint.
 	 */
 	void updatePosControl();
+
+	/**
+	 * @brief Generate and publish roverVelocitySetpoint from manualControlSetpoint.
+	 */
+	void manualPositionMode();
+
+	/**
+	 * @brief Generate and publish roverVelocitySetpoint from positionSetpointTriplet.
+	 */
+	void autoPositionMode();
+
+	/**
+	 * @brief Check if the necessary parameters are set.
+	 * @return True if all checks pass.
+	 */
+	bool runSanityChecks();
+
+	/**
+	 * @brief Reset position controller.
+	 */
+	void reset() {_pos_ctl_course_direction = Vector2f(NAN, NAN);};
 
 protected:
 	/**
@@ -94,27 +110,6 @@ private:
 	void updateSubscriptions();
 
 	/**
-	 * @brief Generate and publish roverPositionSetpoint from position of trajectorySetpoint.
-	 */
-	void offboardPositionMode();
-
-	/**
-	 * @brief Generate and publish roverVelocitySetpoint from manualControlSetpoint (Position Mode) or
-	 * 	  positionSetpointTriplet (Auto Mode) or roverPositionSetpoint.
-	 */
-	void generateVelocitySetpoint();
-
-	/**
-	 * @brief Generate and publish roverVelocitySetpoint from manualControlSetpoint.
-	 */
-	void manualPositionMode();
-
-	/**
-	 * @brief Generate and publish roverVelocitySetpoint from positionSetpointTriplet.
-	 */
-	void autoPositionMode();
-
-	/**
 	 * @brief Calculate the speed at which the rover should arrive at the current waypoint. During waypoint transition the speed is restricted to
 	 * Maximum_speed * (1 - normalized_transition_angle * RM_MISS_VEL_GAIN).
 	 * @param auto_speed Default auto speed [m/s].
@@ -127,24 +122,12 @@ private:
 	float autoArrivalSpeed(float auto_speed, float waypoint_transition_angle, float max_speed, float miss_spd_gain,
 			       int curr_wp_type);
 
-
-	/**
-	 * @brief Check if the necessary parameters are set.
-	 * @return True if all checks pass.
-	 */
-	bool runSanityChecks();
-
 	// uORB subscriptions
-	uORB::Subscription _vehicle_control_mode_sub{ORB_ID(vehicle_control_mode)};
 	uORB::Subscription _manual_control_setpoint_sub{ORB_ID(manual_control_setpoint)};
-	uORB::Subscription _trajectory_setpoint_sub{ORB_ID(trajectory_setpoint)};
-	uORB::Subscription _offboard_control_mode_sub{ORB_ID(offboard_control_mode)};
 	uORB::Subscription _vehicle_attitude_sub{ORB_ID(vehicle_attitude)};
 	uORB::Subscription _vehicle_local_position_sub{ORB_ID(vehicle_local_position)};
 	uORB::Subscription _position_setpoint_triplet_sub{ORB_ID(position_setpoint_triplet)};
 	uORB::Subscription _rover_position_setpoint_sub{ORB_ID(rover_position_setpoint)};
-	vehicle_control_mode_s    _vehicle_control_mode{};
-	offboard_control_mode_s   _offboard_control_mode{};
 	rover_position_setpoint_s _rover_position_setpoint{};
 
 	// uORB publications
@@ -156,24 +139,25 @@ private:
 	// Variables
 	Quatf _vehicle_attitude_quaternion{};
 	Vector2f _curr_pos_ned{};
-	Vector2f _pos_ctl_course_direction{};
-	Vector2f _pos_ctl_start_position_ned{};
 	Vector2f _start_ned{};
 	float _vehicle_yaw{0.f};
 	float _max_yaw_rate{0.f};
-	float _pos_ctl_yaw_setpoint{0.f}; // Yaw setpoint for manual position mode, NAN if yaw rate is manually controlled [rad]
-	float _auto_speed{0.f};
-	float _auto_yaw{0.f};
 	float _yaw_setpoint{NAN};
-	int _curr_wp_type{position_setpoint_s::SETPOINT_TYPE_IDLE};
-	bool _prev_param_check_passed{true};
 
-	// Waypoint variables
+	// Manual position mode variables
+	Vector2f _pos_ctl_course_direction{};
+	Vector2f _pos_ctl_start_position_ned{};
+	float _pos_ctl_yaw_setpoint{0.f}; // Yaw setpoint for manual position mode, NAN if yaw rate is manually controlled [rad]
+
+	// Auto Mode Variables
 	Vector2f _curr_wp_ned{};
 	Vector2f _prev_wp_ned{};
 	Vector2f _next_wp_ned{};
 	float _cruising_speed{0.f};
 	float _waypoint_transition_angle{0.f}; // Angle between the prevWP-currWP and currWP-nextWP line segments [rad]
+	float _auto_speed{0.f};
+	float _auto_yaw{0.f};
+	int _curr_wp_type{position_setpoint_s::SETPOINT_TYPE_IDLE};
 
 	// Class Instances
 	MapProjection _global_ned_proj_ref{}; // Transform global to NED coordinates

@@ -49,14 +49,10 @@
 #include <uORB/Subscription.hpp>
 #include <uORB/topics/rover_rate_setpoint.h>
 #include <uORB/topics/rover_throttle_setpoint.h>
-#include <uORB/topics/vehicle_control_mode.h>
 #include <uORB/topics/manual_control_setpoint.h>
 #include <uORB/topics/vehicle_attitude.h>
 #include <uORB/topics/rover_attitude_status.h>
 #include <uORB/topics/rover_attitude_setpoint.h>
-#include <uORB/topics/actuator_motors.h>
-#include <uORB/topics/offboard_control_mode.h>
-#include <uORB/topics/trajectory_setpoint.h>
 
 /**
  * @brief Class for mecanum attitude control.
@@ -72,9 +68,25 @@ public:
 	~MecanumAttControl() = default;
 
 	/**
-	 * @brief Update attitude controller.
+	 * @brief Generate and publish roverRateSetpoint from roverAttitudeSetpoint.
 	 */
 	void updateAttControl();
+
+	/**
+	 * @brief Generate and publish roverThrottleSetpoint and RoverAttitudeSetpoint from manualControlSetpoint.
+	 */
+	void manualStabMode();
+
+	/**
+	 * @brief Reset attitude controller.
+	 */
+	void reset() {_pid_yaw.resetIntegral(); _stab_yaw_setpoint = NAN; _yaw_setpoint = NAN;};
+
+	/**
+	 * @brief Check if the necessary parameters are set.
+	 * @return True if all checks pass.
+	 */
+	bool runSanityChecks();
 
 protected:
 	/**
@@ -84,35 +96,15 @@ protected:
 
 private:
 	/**
-	 * @brief Generate and publish roverAttitudeSetpoint and roverThrottleSetpoint from manualControlSetpoint (Stab Mode)
-	 * 	  or trajectorySetpoint (Offboard attitude control).
-	 */
-	void generateAttitudeAndThrottleSetpoint();
-
-	/**
 	 * @brief Generate and publish roverRateSetpoint from roverAttitudeSetpoint.
+	 * @param dt [s] Time since last update.
 	 */
-	void generateRateSetpoint();
-
-	/**
-	 * @brief Check if the necessary parameters are set.
-	 * @return True if all checks pass.
-	 */
-	bool runSanityChecks();
+	void generateRateSetpoint(float dt);
 
 	// uORB subscriptions
-	uORB::Subscription _vehicle_control_mode_sub{ORB_ID(vehicle_control_mode)};
 	uORB::Subscription _manual_control_setpoint_sub{ORB_ID(manual_control_setpoint)};
-	uORB::Subscription _trajectory_setpoint_sub{ORB_ID(trajectory_setpoint)};
-	uORB::Subscription _offboard_control_mode_sub{ORB_ID(offboard_control_mode)};
 	uORB::Subscription _vehicle_attitude_sub{ORB_ID(vehicle_attitude)};
-	uORB::Subscription _actuator_motors_sub{ORB_ID(actuator_motors)};
 	uORB::Subscription _rover_attitude_setpoint_sub{ORB_ID(rover_attitude_setpoint)};
-	uORB::Subscription _rover_rate_setpoint_sub{ORB_ID(rover_rate_setpoint)};
-	vehicle_control_mode_s _vehicle_control_mode{};
-	rover_attitude_setpoint_s _rover_attitude_setpoint{};
-	rover_rate_setpoint_s _rover_rate_setpoint{};
-	offboard_control_mode_s _offboard_control_mode{};
 
 	// uORB publications
 	uORB::Publication<rover_rate_setpoint_s> _rover_rate_setpoint_pub{ORB_ID(rover_rate_setpoint)};
@@ -121,13 +113,11 @@ private:
 	uORB::Publication<rover_attitude_status_s> _rover_attitude_status_pub{ORB_ID(rover_attitude_status)};
 
 	// Variables
-	hrt_abstime _timestamp{0};
-	hrt_abstime _last_rate_setpoint_update{0};
 	float _vehicle_yaw{0.f};
-	float _dt{0.f};
+	hrt_abstime _timestamp{0};
 	float _max_yaw_rate{0.f};
-	float _stab_yaw_setpoint{NAN}; // Yaw setpoint for stab mode, NAN if yaw rate is manually controlled [rad]
-	bool _prev_param_check_passed{true};
+	float _stab_yaw_setpoint{0.f}; // Yaw setpoint for heading control stab mode (NAN: heading not controlled)
+	float _yaw_setpoint{NAN};
 
 	// Controllers
 	PID _pid_yaw;
