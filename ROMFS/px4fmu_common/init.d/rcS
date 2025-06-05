@@ -446,6 +446,15 @@ else
 	fi
 
 	#
+	# Start UART/Serial device drivers.
+	# Note: rc.serial is auto-generated from Tools/serial/generate_config.py
+	#
+	. ${R}etc/init.d/rc.serial
+
+	# Must be started after the serial config is read
+	rc_input start $RC_INPUT_ARGS
+
+	#
 	# Commander
 	#
 	if param greater SYS_HITL 0
@@ -485,15 +494,6 @@ else
 		. $BOARD_RC_MAVLINK
 	fi
 	unset BOARD_RC_MAVLINK
-
-	#
-	# Start UART/Serial device drivers.
-	# Note: rc.serial is auto-generated from Tools/serial/generate_config.py
-	#
-	. ${R}etc/init.d/rc.serial
-
-	# Must be started after the serial config is read
-	rc_input start $RC_INPUT_ARGS
 
 	# Manages USB interface
 	if param greater -s SYS_USB_AUTO -1
